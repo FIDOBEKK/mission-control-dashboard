@@ -292,6 +292,7 @@ class MissionDataService
             ->values();
 
         $week = $this->buildWeekView($calendarItems);
+        $calendarModule = $this->buildCalendarModuleData();
 
         return [
             'statusItems' => $statusItems,
@@ -302,8 +303,10 @@ class MissionDataService
             'waitingItems' => $this->buildWaitingItems($scoredActionable),
             'weekUnscheduled' => $weekUnscheduled->take(20)->values()->all(),
             'liveProcesses' => $liveProcesses,
+            'calendarWeek' => $calendarModule['calendarWeek'],
+            'calendarSummary' => $calendarModule['calendarSummary'],
             'fetchedAt' => now()->toIso8601String(),
-            'sources' => $sources,
+            'sources' => array_merge($sources, $calendarModule['sourceDiagnostics']),
         ];
     }
 
@@ -431,6 +434,452 @@ class MissionDataService
             })
             ->values()
             ->all();
+    }
+
+    /**
+     * @return array{calendarWeek: array<int, array<string, mixed>>, calendarSummary: array<string, mixed>, sourceDiagnostics: array<int, array<string, mixed>>}
+     */
+    private function buildCalendarModuleData(): array
+    {
+        $windowStart = now()->startOfDay();
+        $windowEnd = $windowStart->copy()->addDays(6)->endOfDay();
+
+        $sourcePayloads = collect([
+            $this->fetchMicrosoftCalendarEvents($windowStart, $windowEnd),
+            $this->fetchIcsCalendarEvents('Family', 'icloud_calendar_family_url', $windowStart, $windowEnd),
+            $this->fetchIcsCalendarEvents('Private', 'icloud_calendar_private_url', $windowStart, $windowEnd),
+        ]);
+
+        $events = $sourcePayloads
+            ->flatMap(fn (array $source): array => $source['events'])
+            ->sortBy(fn (array $event): int => (int) ($event['sortAt'] ?? 0))
+            ->values();
+
+        $calendarWeek = collect(range(0, 6))
+            ->map(function (int $offset) use ($windowStart, $events): array {
+                $day = $windowStart->copy()->addDays($offset);
+                $dateKey = $day->toDateString();
+
+                $dayEvents = $events
+                    ->filter(fn (array $event): bool => ($event['date'] ?? null) === $dateKey)
+                    ->values();
+
+                $conflictIndexes = [];
+                $conflicts = 0;
+                $lastEndAt = null;
+
+                foreach ($dayEvents as $index => $event) {
+                    $startAt = Arr::get($event, 'startAt');
+                    $endAt = Arr::get($event, 'endAt');
+
+                    if (! is_string($startAt) || ! is_string($endAt)) {
+                        continue;
+                    }
+
+                    try {
+                        $start = Carbon::parse($startAt);
+                        $end = Carbon::parse($endAt);
+                    } catch (Throwable) {
+                        continue;
+                    }
+
+                    if ($lastEndAt && $start->lt($lastEndAt)) {
+                        $conflictIndexes[$index] = true;
+                        if ($index > 0) {
+                            $conflictIndexes[$index - 1] = true;
+                        }
+                        $conflicts++;
+                    }
+
+                    if (! $lastEndAt || $end->gt($lastEndAt)) {
+                        $lastEndAt = $end;
+                    }
+                }
+
+                $mappedEvents = $dayEvents
+                    ->map(function (array $event, int $index) use ($conflictIndexes): array {
+                        return [
+                            'title' => (string) ($event['title'] ?? 'Untitled event'),
+                            'source' => (string) ($event['source'] ?? 'Unknown'),
+                            'timeRange' => (string) ($event['timeRange'] ?? 'Unknown time'),
+                            'location' => $event['location'] ?? null,
+                            'isConflict' => isset($conflictIndexes[$index]),
+                        ];
+                    })
+                    ->all();
+
+                return [
+                    'date' => $dateKey,
+                    'label' => $day->format('l'),
+                    'dateLabel' => $day->format('d M'),
+                    'events' => $mappedEvents,
+                    'conflicts' => $conflicts,
+                ];
+            })
+            ->all();
+
+        $totalEvents = collect($calendarWeek)->sum(fn (array $day): int => count($day['events'] ?? []));
+        $daysWithEvents = collect($calendarWeek)->filter(fn (array $day): bool => ! empty($day['events']))->count();
+        $conflictsCount = collect($calendarWeek)->sum(fn (array $day): int => (int) ($day['conflicts'] ?? 0));
+
+        return [
+            'calendarWeek' => $calendarWeek,
+            'calendarSummary' => [
+                'totalEvents' => $totalEvents,
+                'daysWithEvents' => $daysWithEvents,
+                'conflictsCount' => $conflictsCount,
+                'diagnostics' => $sourcePayloads
+                    ->map(fn (array $source): array => [
+                        'name' => $source['name'],
+                        'ok' => $source['ok'],
+                        'message' => $source['message'],
+                    ])
+                    ->values()
+                    ->all(),
+            ],
+            'sourceDiagnostics' => $sourcePayloads
+                ->map(fn (array $source): array => [
+                    'name' => $source['name'],
+                    'ok' => $source['ok'],
+                    'message' => $source['message'],
+                ])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /**
+     * @return array{name: string, ok: bool, message: string, events: array<int, array<string, mixed>>}
+     */
+    private function fetchMicrosoftCalendarEvents(Carbon $start, Carbon $end): array
+    {
+        $service = 'microsoft_graph_token_fido_readonly';
+        $account = 'fidobot-bekk';
+
+        $tokenResult = $this->runCommand([
+            'security',
+            'find-generic-password',
+            '-a',
+            $account,
+            '-s',
+            $service,
+            '-w',
+        ], timeout: 5);
+
+        if (! $tokenResult['ok']) {
+            return [
+                'name' => 'calendar microsoft',
+                'ok' => false,
+                'message' => 'No Microsoft token available in keychain',
+                'events' => [],
+            ];
+        }
+
+        $tokenPayload = json_decode($tokenResult['output'], true);
+        $accessToken = is_array($tokenPayload) ? Arr::get($tokenPayload, 'access_token') : null;
+
+        if (! is_string($accessToken) || $accessToken === '') {
+            return [
+                'name' => 'calendar microsoft',
+                'ok' => false,
+                'message' => 'Microsoft token payload missing access token',
+                'events' => [],
+            ];
+        }
+
+        $response = $this->runCommand([
+            'curl',
+            '-sS',
+            '-G',
+            'https://graph.microsoft.com/v1.0/me/calendarView',
+            '-H',
+            "Authorization: Bearer {$accessToken}",
+            '-H',
+            'Accept: application/json',
+            '-H',
+            'Prefer: outlook.timezone="Europe/Oslo"',
+            '--data-urlencode',
+            'startDateTime='.$start->format('Y-m-d\TH:i:s'),
+            '--data-urlencode',
+            'endDateTime='.$end->format('Y-m-d\TH:i:s'),
+            '--data-urlencode',
+            '$select=subject,start,end,location,isCancelled',
+            '--data-urlencode',
+            '$orderby=start/dateTime',
+            '--data-urlencode',
+            '$top=100',
+        ], timeout: 10);
+
+        if (! $response['ok']) {
+            return [
+                'name' => 'calendar microsoft',
+                'ok' => false,
+                'message' => Str::limit($response['message'] ?: 'Microsoft calendar request failed', 120),
+                'events' => [],
+            ];
+        }
+
+        $decoded = json_decode($response['output'], true);
+        if (! is_array($decoded)) {
+            return [
+                'name' => 'calendar microsoft',
+                'ok' => false,
+                'message' => 'Microsoft calendar response was not valid JSON',
+                'events' => [],
+            ];
+        }
+
+        $events = collect(Arr::get($decoded, 'value', []))
+            ->filter(fn (mixed $event): bool => is_array($event) && Arr::get($event, 'isCancelled') !== true)
+            ->map(fn (array $event): ?array => $this->normalizeCalendarEvent(
+                source: 'Microsoft',
+                title: (string) Arr::get($event, 'subject', 'Untitled event'),
+                startAt: Arr::get($event, 'start.dateTime'),
+                endAt: Arr::get($event, 'end.dateTime'),
+                location: Arr::get($event, 'location.displayName'),
+            ))
+            ->filter()
+            ->values()
+            ->all();
+
+        return [
+            'name' => 'calendar microsoft',
+            'ok' => true,
+            'message' => sprintf('%d events in next 7 days', count($events)),
+            'events' => $events,
+        ];
+    }
+
+    /**
+     * @return array{name: string, ok: bool, message: string, events: array<int, array<string, mixed>>}
+     */
+    private function fetchIcsCalendarEvents(string $source, string $keychainService, Carbon $start, Carbon $end): array
+    {
+        $account = 'fidobot-bekk';
+
+        $urlResult = $this->runCommand([
+            'security',
+            'find-generic-password',
+            '-a',
+            $account,
+            '-s',
+            $keychainService,
+            '-w',
+        ], timeout: 5);
+
+        if (! $urlResult['ok']) {
+            return [
+                'name' => 'calendar '.Str::lower($source),
+                'ok' => false,
+                'message' => 'Calendar feed URL unavailable in keychain',
+                'events' => [],
+            ];
+        }
+
+        $feedUrl = trim($urlResult['output']);
+        if ($feedUrl === '') {
+            return [
+                'name' => 'calendar '.Str::lower($source),
+                'ok' => false,
+                'message' => 'Calendar feed URL was empty',
+                'events' => [],
+            ];
+        }
+
+        if (Str::startsWith($feedUrl, 'webcal://')) {
+            $feedUrl = 'https://'.Str::after($feedUrl, 'webcal://');
+        }
+
+        $feedResult = $this->runCommand([
+            'curl',
+            '-sS',
+            '-L',
+            $feedUrl,
+        ], timeout: 10);
+
+        if (! $feedResult['ok']) {
+            return [
+                'name' => 'calendar '.Str::lower($source),
+                'ok' => false,
+                'message' => Str::limit($feedResult['message'] ?: 'Unable to fetch ICS feed', 120),
+                'events' => [],
+            ];
+        }
+
+        $events = $this->parseIcsCalendar($feedResult['output'], $source, $start, $end);
+
+        return [
+            'name' => 'calendar '.Str::lower($source),
+            'ok' => true,
+            'message' => sprintf('%d events in next 7 days', count($events)),
+            'events' => $events,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function parseIcsCalendar(string $icsPayload, string $source, Carbon $start, Carbon $end): array
+    {
+        $lines = preg_split('/\R/', $icsPayload) ?: [];
+        $unfolded = [];
+
+        foreach ($lines as $line) {
+            if (($line !== '') && ($line[0] === ' ' || $line[0] === "\t") && ! empty($unfolded)) {
+                $unfolded[count($unfolded) - 1] .= substr($line, 1);
+                continue;
+            }
+
+            $unfolded[] = $line;
+        }
+
+        $events = [];
+        $inEvent = false;
+        $eventFields = [];
+
+        foreach ($unfolded as $line) {
+            if ($line === 'BEGIN:VEVENT') {
+                $inEvent = true;
+                $eventFields = [];
+
+                continue;
+            }
+
+            if ($line === 'END:VEVENT') {
+                $inEvent = false;
+
+                $startField = $eventFields['DTSTART'][0] ?? null;
+                $endField = $eventFields['DTEND'][0] ?? $startField;
+                $title = (string) (($eventFields['SUMMARY'][0]['value'] ?? null) ?: 'Untitled event');
+                $location = $eventFields['LOCATION'][0]['value'] ?? null;
+
+                $normalized = $this->normalizeCalendarEvent(
+                    source: $source,
+                    title: $title,
+                    startAt: $startField['value'] ?? null,
+                    endAt: $endField['value'] ?? null,
+                    location: is_string($location) && $location !== '' ? $location : null,
+                    startMeta: $startField['meta'] ?? [],
+                    endMeta: $endField['meta'] ?? [],
+                );
+
+                if ($normalized !== null) {
+                    $eventDate = Carbon::parse($normalized['startAt']);
+                    if ($eventDate->betweenIncluded($start, $end)) {
+                        $events[] = $normalized;
+                    }
+                }
+
+                continue;
+            }
+
+            if (! $inEvent || ! str_contains($line, ':')) {
+                continue;
+            }
+
+            [$rawKey, $value] = explode(':', $line, 2);
+            [$name, $meta] = $this->parseIcsKey($rawKey);
+            $eventFields[$name][] = [
+                'value' => trim($value),
+                'meta' => $meta,
+            ];
+        }
+
+        return collect($events)
+            ->sortBy('sortAt')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array{0: string, 1: array<string, string>}
+     */
+    private function parseIcsKey(string $rawKey): array
+    {
+        $parts = explode(';', $rawKey);
+        $name = strtoupper(array_shift($parts) ?? $rawKey);
+        $meta = [];
+
+        foreach ($parts as $part) {
+            if (! str_contains($part, '=')) {
+                continue;
+            }
+
+            [$metaKey, $metaValue] = explode('=', $part, 2);
+            $meta[strtoupper($metaKey)] = $metaValue;
+        }
+
+        return [$name, $meta];
+    }
+
+    /**
+     * @param  array<string, string>  $startMeta
+     * @param  array<string, string>  $endMeta
+     * @return array<string, mixed>|null
+     */
+    private function normalizeCalendarEvent(
+        string $source,
+        string $title,
+        mixed $startAt,
+        mixed $endAt,
+        ?string $location = null,
+        array $startMeta = [],
+        array $endMeta = [],
+    ): ?array {
+        if (! is_string($startAt) || $startAt === '') {
+            return null;
+        }
+
+        try {
+            $start = $this->parseCalendarDateTime($startAt, $startMeta);
+            $end = is_string($endAt) && $endAt !== ''
+                ? $this->parseCalendarDateTime($endAt, $endMeta)
+                : $start->copy()->addHour();
+        } catch (Throwable) {
+            return null;
+        }
+
+        if ($end->lessThanOrEqualTo($start)) {
+            $end = $start->copy()->addMinutes(30);
+        }
+
+        $isAllDay = ($startMeta['VALUE'] ?? null) === 'DATE';
+        $timeRange = $isAllDay
+            ? 'Hele dagen'
+            : $start->format('H:i').' - '.$end->format('H:i');
+
+        return [
+            'source' => $source,
+            'title' => $title,
+            'location' => $location,
+            'startAt' => $start->toIso8601String(),
+            'endAt' => $end->toIso8601String(),
+            'date' => $start->toDateString(),
+            'timeRange' => $timeRange,
+            'sortAt' => $start->getTimestamp(),
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $meta
+     */
+    private function parseCalendarDateTime(string $value, array $meta = []): Carbon
+    {
+        $timezone = $meta['TZID'] ?? 'Europe/Oslo';
+
+        if (($meta['VALUE'] ?? null) === 'DATE' && preg_match('/^\d{8}$/', $value) === 1) {
+            return Carbon::createFromFormat('Ymd', $value, $timezone)->startOfDay();
+        }
+
+        if (preg_match('/^\d{8}T\d{6}Z$/', $value) === 1) {
+            return Carbon::createFromFormat('Ymd\THis\Z', $value, 'UTC')->setTimezone($timezone);
+        }
+
+        if (preg_match('/^\d{8}T\d{6}$/', $value) === 1) {
+            return Carbon::createFromFormat('Ymd\THis', $value, $timezone);
+        }
+
+        return Carbon::parse($value, $timezone);
     }
 
     /**

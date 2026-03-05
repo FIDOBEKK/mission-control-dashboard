@@ -26,6 +26,8 @@ class ExampleTest extends TestCase
                 'waitingItems',
                 'weekUnscheduled',
                 'liveProcesses',
+                'calendarWeek',
+                'calendarSummary',
                 'fetchedAt',
                 'sources',
             ]);

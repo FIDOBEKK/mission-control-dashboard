@@ -29,8 +29,12 @@ class DashboardController extends Controller
             $activeModule = 'tasks';
         }
 
+        $mission = $this->missionDataService->getMissionData();
+
         return view('dashboard.index', [
-            'initialMission' => $this->missionDataService->getMissionData(),
+            'initialMission' => $mission,
+            'calendarWeek' => $mission['calendarWeek'] ?? [],
+            'calendarSummary' => $mission['calendarSummary'] ?? [],
             'modules' => $modules,
             'activeModule' => $activeModule,
         ]);

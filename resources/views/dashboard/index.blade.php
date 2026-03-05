@@ -86,6 +86,77 @@
                         </div>
                     </details>
                 </section>
+            @elseif ($activeModule === 'calendar')
+                @php
+                    $calendarWeek = collect($calendarWeek ?? $initialMission['calendarWeek'] ?? []);
+                    $calendarSummary = $calendarSummary ?? $initialMission['calendarSummary'] ?? [];
+                    $calendarDiagnostics = collect($calendarSummary['diagnostics'] ?? []);
+                @endphp
+
+                <section class="space-y-3">
+                    <div class="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 sm:grid-cols-3">
+                        <div class="rounded-md border border-zinc-800/80 bg-zinc-950/80 px-2 py-1.5">
+                            <p class="text-[10px] uppercase tracking-wide text-zinc-500">Totale hendelser</p>
+                            <p class="text-xs font-medium text-zinc-100">{{ $calendarSummary['totalEvents'] ?? 0 }}</p>
+                        </div>
+                        <div class="rounded-md border border-zinc-800/80 bg-zinc-950/80 px-2 py-1.5">
+                            <p class="text-[10px] uppercase tracking-wide text-zinc-500">Dager med hendelser</p>
+                            <p class="text-xs font-medium text-zinc-100">{{ $calendarSummary['daysWithEvents'] ?? 0 }}</p>
+                        </div>
+                        <div class="rounded-md border border-zinc-800/80 bg-zinc-950/80 px-2 py-1.5">
+                            <p class="text-[10px] uppercase tracking-wide text-zinc-500">Konflikter</p>
+                            <p class="text-xs font-medium {{ ($calendarSummary['conflictsCount'] ?? 0) > 0 ? 'text-rose-300' : 'text-emerald-300' }}">
+                                {{ $calendarSummary['conflictsCount'] ?? 0 }}
+                            </p>
+                        </div>
+                    </div>
+
+                    @if ($calendarDiagnostics->isNotEmpty())
+                        <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+                            <h2 class="text-xs font-medium text-zinc-300">Kildediagnostikk</h2>
+                            <ul class="mt-2 space-y-1">
+                                @foreach ($calendarDiagnostics as $diag)
+                                    <li class="rounded border border-zinc-800 bg-zinc-950/70 px-2 py-1 text-[11px]">
+                                        <span class="text-zinc-300">{{ $diag['name'] ?? 'calendar source' }}:</span>
+                                        <span class="{{ ($diag['ok'] ?? false) ? 'text-emerald-300' : 'text-amber-300' }}">{{ $diag['message'] ?? 'unknown' }}</span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @endif
+
+                    <div class="grid gap-3 lg:grid-cols-2">
+                        @foreach ($calendarWeek as $day)
+                            <article class="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+                                <div class="flex items-center justify-between gap-2">
+                                    <h3 class="text-sm font-semibold text-zinc-100">{{ $day['label'] ?? '' }} <span class="text-zinc-500">{{ $day['dateLabel'] ?? '' }}</span></h3>
+                                    @if (($day['conflicts'] ?? 0) > 0)
+                                        <span class="rounded bg-rose-950/40 px-2 py-0.5 text-[10px] text-rose-300">{{ $day['conflicts'] }} konflikt{{ ($day['conflicts'] ?? 0) === 1 ? '' : 'er' }}</span>
+                                    @endif
+                                </div>
+
+                                @if (empty($day['events']))
+                                    <p class="mt-2 rounded border border-dashed border-zinc-700 bg-zinc-950/50 px-2 py-1.5 text-xs text-zinc-500">Ingen hendelser.</p>
+                                @else
+                                    <ul class="mt-2 space-y-2">
+                                        @foreach ($day['events'] as $event)
+                                            <li class="rounded-md border px-2 py-1.5 {{ ($event['isConflict'] ?? false) ? 'border-rose-700/60 bg-rose-950/20' : 'border-zinc-800/80 bg-zinc-950/70' }}">
+                                                <div class="flex items-center justify-between gap-2 text-[11px]">
+                                                    <span class="font-medium {{ ($event['isConflict'] ?? false) ? 'text-rose-200' : 'text-zinc-200' }}">{{ $event['timeRange'] ?? 'Unknown time' }}</span>
+                                                    <span class="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-300">{{ $event['source'] ?? 'Unknown' }}</span>
+                                                </div>
+                                                <p class="mt-1 text-xs text-zinc-200">{{ $event['title'] ?? 'Untitled event' }}</p>
+                                                @if (! empty($event['location']))
+                                                    <p class="mt-1 text-[11px] text-zinc-500">{{ $event['location'] }}</p>
+                                                @endif
+                                            </li>
+                                        @endforeach
+                                    </ul>
+                                @endif
+                            </article>
+                        @endforeach
+                    </div>
+                </section>
             @else
                 <section class="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
                     <h2 class="text-sm font-semibold text-zinc-100">

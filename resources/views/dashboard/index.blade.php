@@ -10,7 +10,7 @@
     </head>
     <body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
         <div class="mx-auto min-h-screen w-full max-w-6xl px-4 py-4 sm:px-6 lg:py-6">
-            <header class="mb-4 flex items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
+            <header class="mb-3 flex items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
                 <div>
                     <h1 class="text-lg font-semibold text-zinc-100">Mission Control</h1>
                     <p class="text-xs text-zinc-500">Intern samarbeidstavle for Anders og assistent</p>
@@ -18,62 +18,84 @@
                 <span id="updated-label" class="text-xs text-zinc-400">Laster data...</span>
             </header>
 
-            <div id="error-banner" class="mb-3 hidden rounded-md border border-rose-900/60 bg-rose-950/20 px-3 py-2 text-xs text-rose-300"></div>
+            <nav class="mb-4 flex gap-2 overflow-x-auto pb-1 text-xs sm:text-sm" aria-label="Dashboard modules">
+                @foreach ($modules as $module)
+                    <a href="{{ route('dashboard.index', ['module' => $module['key']]) }}"
+                        class="whitespace-nowrap rounded-md border px-3 py-1.5 {{ $activeModule === $module['key']
+                            ? 'border-violet-500/60 bg-violet-500/10 text-violet-200'
+                            : 'border-zinc-800 bg-zinc-900/70 text-zinc-200' }}">
+                        {{ $module['label'] }}
+                    </a>
+                @endforeach
+            </nav>
 
-            <section class="mb-4">
-                <div id="status-strip" class="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 sm:grid-cols-2 lg:grid-cols-4"></div>
-            </section>
+            @if ($activeModule === 'tasks')
+                <div id="error-banner" class="mb-3 hidden rounded-md border border-rose-900/60 bg-rose-950/20 px-3 py-2 text-xs text-rose-300"></div>
 
-            <main class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <article class="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-                    <h2 class="text-sm font-semibold text-zinc-100">Nå</h2>
-                    <p class="mt-1 text-[11px] text-zinc-500">Høyest prioriterte aktive eller review-oppgaver</p>
-                    <ul id="now-items" class="mt-3 space-y-2"></ul>
-                </article>
+                <section class="mb-4">
+                    <div id="status-strip" class="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 sm:grid-cols-2 lg:grid-cols-4"></div>
+                </section>
 
-                <article class="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-                    <h2 class="text-sm font-semibold text-zinc-100">Denne uka</h2>
-                    <p class="mt-1 text-[11px] text-zinc-500">Kondensert plan mandag til søndag</p>
-                    <ul id="week-items" class="mt-3 space-y-2"></ul>
-                </article>
+                <main class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <article id="now-panel" class="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+                        <h2 class="text-sm font-semibold text-zinc-100">Nå</h2>
+                        <p class="mt-1 text-[11px] text-zinc-500">Høyest prioriterte aktive eller review-oppgaver</p>
+                        <ul id="now-items" class="mt-3 space-y-2"></ul>
+                    </article>
 
-                <article class="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 sm:col-span-2 lg:col-span-1">
-                    <h2 class="text-sm font-semibold text-zinc-100">Venter på Anders</h2>
-                    <p class="mt-1 text-[11px] text-zinc-500">Godkjenning, review eller eksplisitte ventepunkter</p>
-                    <ul id="waiting-items" class="mt-3 space-y-2"></ul>
-                </article>
-            </main>
+                    <article id="week-panel" class="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+                        <h2 class="text-sm font-semibold text-zinc-100">Denne uka</h2>
+                        <p class="mt-1 text-[11px] text-zinc-500">Kondensert plan mandag til søndag</p>
+                        <ul id="week-items" class="mt-3 space-y-2"></ul>
+                    </article>
 
-            <section class="mt-4 space-y-3">
-                <details class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3" open>
-                    <summary class="cursor-pointer text-sm font-medium text-zinc-200">Sekundære detaljer</summary>
-                    <div class="mt-3 space-y-3">
-                        <div>
-                            <h3 class="text-xs font-medium text-zinc-300">Kolonner</h3>
-                            <div id="columns-grid" class="mt-2 grid gap-3 md:grid-cols-2"></div>
+                    <article id="waiting-panel" class="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 sm:col-span-2 lg:col-span-1">
+                        <h2 class="text-sm font-semibold text-zinc-100">Venter på Anders</h2>
+                        <p class="mt-1 text-[11px] text-zinc-500">Godkjenning, review eller eksplisitte ventepunkter</p>
+                        <ul id="waiting-items" class="mt-3 space-y-2"></ul>
+                    </article>
+                </main>
+
+                <section class="mt-4 space-y-3">
+                    <details id="secondary-panel" class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3" open>
+                        <summary class="cursor-pointer text-sm font-medium text-zinc-200">Sekundære detaljer</summary>
+                        <div class="mt-3 space-y-3">
+                            <div>
+                                <h3 class="text-xs font-medium text-zinc-300">Kolonner</h3>
+                                <div id="columns-grid" class="mt-2 grid gap-3 md:grid-cols-2"></div>
+                            </div>
+
+                            <div>
+                                <h3 class="text-xs font-medium text-zinc-300">Uplanlagte punkter</h3>
+                                <div id="week-unscheduled" class="mt-2"></div>
+                            </div>
                         </div>
+                    </details>
 
-                        <div>
-                            <h3 class="text-xs font-medium text-zinc-300">Uplanlagte punkter</h3>
-                            <div id="week-unscheduled" class="mt-2"></div>
+                    <details id="system-panel" class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+                        <summary class="cursor-pointer text-sm font-medium text-zinc-200">Live prosesser og kildediagnostikk</summary>
+                        <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                            <div>
+                                <h3 class="text-xs font-medium text-zinc-300">Live prosesser</h3>
+                                <div id="live-processes" class="mt-2 space-y-2"></div>
+                            </div>
+                            <div>
+                                <h3 class="text-xs font-medium text-zinc-300">Kilder</h3>
+                                <div id="source-diagnostics" class="mt-2 space-y-2 rounded-md border border-zinc-800 bg-zinc-900/50 p-3 text-xs"></div>
+                            </div>
                         </div>
-                    </div>
-                </details>
-
-                <details class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
-                    <summary class="cursor-pointer text-sm font-medium text-zinc-200">Live prosesser og kildediagnostikk</summary>
-                    <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                        <div>
-                            <h3 class="text-xs font-medium text-zinc-300">Live prosesser</h3>
-                            <div id="live-processes" class="mt-2 space-y-2"></div>
-                        </div>
-                        <div>
-                            <h3 class="text-xs font-medium text-zinc-300">Kilder</h3>
-                            <div id="source-diagnostics" class="mt-2 space-y-2 rounded-md border border-zinc-800 bg-zinc-900/50 p-3 text-xs"></div>
-                        </div>
-                    </div>
-                </details>
-            </section>
+                    </details>
+                </section>
+            @else
+                <section class="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+                    <h2 class="text-sm font-semibold text-zinc-100">
+                        {{ collect($modules)->firstWhere('key', $activeModule)['label'] ?? ucfirst($activeModule) }}
+                    </h2>
+                    <p class="mt-2 text-sm text-zinc-400">
+                        Denne modulen er klar for neste iterasjon. Si hva du vil se her først.
+                    </p>
+                </section>
+            @endif
         </div>
 
         <script>
@@ -85,6 +107,7 @@
                 { key: 'done', title: 'Done' },
             ];
 
+            const tasksEnabled = @json($activeModule === 'tasks');
             let mission = @json($initialMission);
             let loading = false;
             let lastUpdatedAt = Date.now();
@@ -242,6 +265,10 @@
 
             function renderAll() {
                 setUpdatedLabel();
+                if (!tasksEnabled) {
+                    return;
+                }
+
                 renderStatus();
                 renderNowItems();
                 renderWeekItems();
@@ -274,8 +301,11 @@
             }
 
             renderAll();
-            window.setInterval(refreshMission, 20000);
-            refreshMission();
+
+            if (tasksEnabled) {
+                window.setInterval(refreshMission, 20000);
+                refreshMission();
+            }
         </script>
     </body>
 </html>

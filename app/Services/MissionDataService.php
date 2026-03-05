@@ -26,8 +26,9 @@ class MissionDataService
         ];
 
         $statusItems = [];
-        $weekItems = collect();
+        $calendarItems = collect();
         $weekUnscheduled = collect();
+        $actionableItems = collect();
         $liveProcesses = [];
 
         $cronData = $this->runCommand(['openclaw', 'cron', 'list', '--json'], timeout: 6);
@@ -49,7 +50,7 @@ class MissionDataService
                 ->take(8)
                 ->all();
 
-            $weekItems = $weekItems->merge(
+            $calendarItems = $calendarItems->merge(
                 $jobs
                     ->map(function (array $job): ?array {
                         $nextRunAt = Arr::get($job, 'nextRunAt') ?? Arr::get($job, 'next_run_at');
@@ -65,6 +66,7 @@ class MissionDataService
                             'time' => $date->format('H:i'),
                             'date' => $date->toDateString(),
                             'source' => 'openclaw',
+                            'updatedAt' => $date->toIso8601String(),
                         ];
                     })
                     ->filter()
@@ -109,6 +111,22 @@ class MissionDataService
                     ])
             );
 
+            $actionableItems = $actionableItems->merge(
+                $issues->map(function (array $issue): array {
+                    $title = sprintf('#%s %s', $issue['number'] ?? '?', $issue['title'] ?? 'Untitled issue');
+                    $updatedAt = is_string($issue['updatedAt'] ?? null) ? $issue['updatedAt'] : null;
+                    $date = $updatedAt ? Carbon::parse($updatedAt)->toDateString() : null;
+
+                    return [
+                        'title' => $title,
+                        'type' => 'backlog',
+                        'source' => 'GitHub issues',
+                        'date' => $date,
+                        'updatedAt' => $updatedAt,
+                    ];
+                })
+            );
+
             $statusItems[] = [
                 'name' => 'GitHub issues',
                 'status' => sprintf('%d open', $issues->count()),
@@ -149,7 +167,7 @@ class MissionDataService
                 ->take(10)
                 ->all();
 
-            $weekItems = $weekItems->merge(
+            $calendarItems = $calendarItems->merge(
                 $prs->map(function (array $pr): ?array {
                     if (empty($pr['updatedAt'])) {
                         return null;
@@ -163,8 +181,28 @@ class MissionDataService
                         'time' => $date->format('H:i'),
                         'date' => $date->toDateString(),
                         'source' => 'GitHub PRs',
+                        'updatedAt' => $date->toIso8601String(),
                     ];
                 })->filter()->values()
+            );
+
+            $actionableItems = $actionableItems->merge(
+                $prs->map(function (array $pr): array {
+                    $decision = Str::lower((string) ($pr['reviewDecision'] ?? ''));
+                    $needsReview = $decision === 'review_required' || $decision === '';
+                    $title = sprintf('PR #%s %s', $pr['number'] ?? '?', $pr['title'] ?? 'Untitled PR');
+                    $updatedAt = is_string($pr['updatedAt'] ?? null) ? $pr['updatedAt'] : null;
+                    $date = $updatedAt ? Carbon::parse($updatedAt)->toDateString() : null;
+
+                    return [
+                        'title' => $title,
+                        'type' => $needsReview ? 'review' : 'active',
+                        'source' => 'GitHub PRs',
+                        'date' => $date,
+                        'updatedAt' => $updatedAt,
+                        'waiting' => $needsReview,
+                    ];
+                })
             );
 
             $statusItems[] = [
@@ -244,12 +282,24 @@ class MissionDataService
 
         $columns['done'] = $gitSummaries->take(12)->all();
 
-        $week = $this->buildWeekView($weekItems);
+        $scoredActionable = $actionableItems
+            ->map(function (array $item): array {
+                $item['score'] = $this->scoreItem($item);
+
+                return $item;
+            })
+            ->sortByDesc('score')
+            ->values();
+
+        $week = $this->buildWeekView($calendarItems);
 
         return [
             'statusItems' => $statusItems,
             'columns' => $columns,
             'week' => $week,
+            'weekItems' => $this->buildCondensedWeekItems($calendarItems->merge($scoredActionable)),
+            'nowItems' => $this->buildNowItems($scoredActionable),
+            'waitingItems' => $this->buildWaitingItems($scoredActionable),
             'weekUnscheduled' => $weekUnscheduled->take(20)->values()->all(),
             'liveProcesses' => $liveProcesses,
             'fetchedAt' => now()->toIso8601String(),
@@ -291,6 +341,159 @@ class MissionDataService
                 ];
             })
             ->all();
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $items
+     * @return array<int, array<string, mixed>>
+     */
+    private function buildCondensedWeekItems(Collection $items): array
+    {
+        $startOfWeek = now()->startOfWeek(Carbon::MONDAY);
+
+        return collect(range(0, 6))
+            ->map(function (int $offset) use ($startOfWeek, $items): array {
+                $day = $startOfWeek->copy()->addDays($offset);
+                $dateKey = $day->toDateString();
+
+                $dayItems = $items
+                    ->filter(fn (array $item): bool => ($item['date'] ?? null) === $dateKey)
+                    ->sortByDesc(fn (array $item): int => (int) ($item['score'] ?? $this->scoreItem($item)))
+                    ->map(function (array $item): string {
+                        $title = (string) ($item['title'] ?? 'Untitled');
+                        $time = isset($item['time']) && is_string($item['time']) ? "{$item['time']} " : '';
+
+                        return trim($time.$title);
+                    })
+                    ->take(3)
+                    ->values()
+                    ->all();
+
+                return [
+                    'dayKey' => Str::lower($day->format('D')),
+                    'label' => $day->shortEnglishDayOfWeek,
+                    'date' => $day->format('d M'),
+                    'items' => $dayItems,
+                ];
+            })
+            ->all();
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $items
+     * @return array<int, array<string, mixed>>
+     */
+    private function buildNowItems(Collection $items): array
+    {
+        return $items
+            ->filter(fn (array $item): bool => in_array(($item['type'] ?? ''), ['active', 'review'], true))
+            ->take(6)
+            ->map(function (array $item): array {
+                return [
+                    'title' => (string) ($item['title'] ?? 'Untitled'),
+                    'type' => (string) ($item['type'] ?? 'active'),
+                    'source' => (string) ($item['source'] ?? 'unknown'),
+                    'score' => (int) ($item['score'] ?? 0),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $items
+     * @return array<int, array<string, mixed>>
+     */
+    private function buildWaitingItems(Collection $items): array
+    {
+        return $items
+            ->filter(function (array $item): bool {
+                if (($item['type'] ?? '') === 'review') {
+                    return true;
+                }
+
+                if (($item['waiting'] ?? false) === true) {
+                    return true;
+                }
+
+                $title = Str::lower((string) ($item['title'] ?? ''));
+
+                return Str::contains($title, ['wait', 'waiting', 'venter', 'approval', 'approve', 'godkjenn']);
+            })
+            ->take(8)
+            ->map(function (array $item): array {
+                return [
+                    'title' => (string) ($item['title'] ?? 'Untitled'),
+                    'type' => (string) ($item['type'] ?? 'review'),
+                    'source' => (string) ($item['source'] ?? 'unknown'),
+                    'score' => (int) ($item['score'] ?? 0),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function scoreItem(array $item): int
+    {
+        $type = (string) ($item['type'] ?? 'backlog');
+        $title = Str::lower((string) ($item['title'] ?? ''));
+
+        $typeWeight = [
+            'review' => 50,
+            'active' => 40,
+            'planned' => 22,
+            'backlog' => 18,
+            'done' => 8,
+        ];
+
+        $score = $typeWeight[$type] ?? 10;
+
+        $keywordWeights = [
+            'urgent' => 35,
+            'haster' => 35,
+            'blocker' => 32,
+            'blocked' => 28,
+            'blokkert' => 28,
+            'review' => 24,
+            'gjennomgang' => 24,
+            'approval' => 22,
+            'approve' => 22,
+            'godkjenning' => 22,
+            'today' => 18,
+            'i dag' => 18,
+        ];
+
+        foreach ($keywordWeights as $keyword => $weight) {
+            if (Str::contains($title, $keyword)) {
+                $score += $weight;
+            }
+        }
+
+        if (($item['waiting'] ?? false) === true) {
+            $score += 14;
+        }
+
+        $dateCandidate = $item['updatedAt'] ?? $item['date'] ?? null;
+        if (is_string($dateCandidate) && $dateCandidate !== '') {
+            try {
+                $hours = abs(now()->diffInHours(Carbon::parse($dateCandidate), false));
+
+                if ($hours <= 24) {
+                    $score += 24;
+                } elseif ($hours <= 72) {
+                    $score += 14;
+                } elseif ($hours <= 168) {
+                    $score += 8;
+                }
+            } catch (Throwable) {
+                // Ignore invalid recency hints.
+            }
+        }
+
+        return $score;
     }
 
     /**

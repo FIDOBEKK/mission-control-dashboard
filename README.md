@@ -1,45 +1,46 @@
-# Mission Control Dashboard (local mock)
+# Mission Control Dashboard (Laravel)
 
-Static, local-only dashboard shell inspired by Linear.
+Laravel-first migration of the Mission Control prototype.
 
 ## Stack
 
-- Vite
-- React
-- Tailwind CSS (via `@tailwindcss/vite`)
+- Laravel 12
+- Blade + Tailwind (Vite)
+- Vanilla JS auto-refresh every 20s
 
-## Features implemented
+## Routes
 
-- Dark mode default UI
-- Left sidebar navigation
-- Top bar with search + quick actions
-- Main grid with empty module cards:
-  - Today
-  - Priorities
-  - Projects
-  - Signals
-  - Decisions
-- Right rail placeholders for Activity and Notes
-- Status strip with mock system states:
-  - Calendar sync
-  - GitHub sync
-  - Transcription pipeline
-  - Local AI status
+- `GET /` Mission Control dashboard UI
+- `GET /api/mission` live mission JSON payload
 
-Everything is static/mock for now.
+## Live data sources
+
+The API collects data with `Symfony\Component\Process\Process` and graceful fallback per source:
+
+- `openclaw cron list --json`
+- `gh issue list --repo OnePagerHub/frame-generator`
+- `gh pr list --repo OnePagerHub/frame-generator`
+- `ps -Ao pid,pcpu,pmem,comm,args`
+- `git log` from detected local repos
+
+Each source contributes diagnostics in `sources[]` with `ok`/`message`.
 
 ## Run locally
 
 ```bash
-cd /Users/andersiglebekk/Documents/mission-control-dashboard
+composer install
 npm install
+cp .env.example .env
+php artisan key:generate
+php artisan serve
 npm run dev
 ```
 
-Then open the local Vite URL shown in terminal (usually `http://localhost:5173`).
+App URL: `http://127.0.0.1:8000`
 
-## Build
+## Build + test
 
 ```bash
 npm run build
+php artisan test --compact
 ```

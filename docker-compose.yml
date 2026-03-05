@@ -1,0 +1,13 @@
+services:
+  mission-control-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mission-control-dashboard
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/var/www/html/storage
+      - ./database:/var/www/html/database
+      - ./.env:/var/www/html/.env

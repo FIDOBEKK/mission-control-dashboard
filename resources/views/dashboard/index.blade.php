@@ -125,6 +125,19 @@
                         </div>
                     @endif
 
+                    @php
+                        $unscheduled = collect($calendarSummary['unscheduled'] ?? []);
+                    @endphp
+
+                    @if (($calendarSummary['totalEvents'] ?? 0) === 0)
+                        <div class="mb-3 rounded-md border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-300">
+                            Ingen dato-festede oppgaver funnet denne uka ennå.
+                            @if ($unscheduled->isNotEmpty())
+                                <span class="text-zinc-400">Viser {{ $unscheduled->count() }} uschedulert(e) oppgave(r) under.</span>
+                            @endif
+                        </div>
+                    @endif
+
                     <div class="grid gap-3 lg:grid-cols-2">
                         @foreach ($calendarWeek as $day)
                             <article class="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
@@ -157,9 +170,6 @@
                         @endforeach
                     </div>
 
-                    @php
-                        $unscheduled = collect($calendarSummary['unscheduled'] ?? []);
-                    @endphp
                     @if ($unscheduled->isNotEmpty())
                         <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
                             <h3 class="text-xs font-medium text-zinc-300">Andre oppgaver denne uka (uten dag)</h3>

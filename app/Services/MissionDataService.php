@@ -1050,9 +1050,11 @@ class MissionDataService
         try {
             $process = new Process($command, $cwd);
             $process->setTimeout($timeout);
-            $process->setEnv([
+            $env = array_merge($_ENV, $_SERVER, [
                 'PATH' => '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+                'HOME' => getenv('HOME') ?: ($_SERVER['HOME'] ?? ''),
             ]);
+            $process->setEnv($env);
             $process->run();
 
             $output = trim($process->getOutput());

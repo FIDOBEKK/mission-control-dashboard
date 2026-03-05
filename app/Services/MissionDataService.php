@@ -292,7 +292,7 @@ class MissionDataService
             ->values();
 
         $week = $this->buildWeekView($calendarItems);
-        $calendarModule = $this->buildCalendarModuleData();
+        $calendarModule = $this->buildCalendarModuleData($calendarItems, $scoredActionable, $columns);
 
         return [
             'statusItems' => $statusItems,
@@ -437,27 +437,74 @@ class MissionDataService
     }
 
     /**
+     * @param  Collection<int, array<string, mixed>>  $calendarItems
+     * @param  Collection<int, array<string, mixed>>  $scoredActionable
+     * @param  array<string, array<int, string>>  $columns
      * @return array{calendarWeek: array<int, array<string, mixed>>, calendarSummary: array<string, mixed>, sourceDiagnostics: array<int, array<string, mixed>>}
      */
-    private function buildCalendarModuleData(): array
+    private function buildCalendarModuleData(Collection $calendarItems, Collection $scoredActionable, array $columns): array
     {
-        $windowStart = now()->startOfDay();
-        $windowEnd = $windowStart->copy()->addDays(6)->endOfDay();
+        $weekStart = now()->startOfWeek(Carbon::MONDAY);
+        $weekEnd = $weekStart->copy()->addDays(6)->endOfDay();
 
-        $sourcePayloads = collect([
-            $this->fetchMicrosoftCalendarEvents($windowStart, $windowEnd),
-            $this->fetchIcsCalendarEvents('Family', 'icloud_calendar_family_url', $windowStart, $windowEnd),
-            $this->fetchIcsCalendarEvents('Private', 'icloud_calendar_private_url', $windowStart, $windowEnd),
-        ]);
+        $timedEvents = $calendarItems
+            ->map(function (array $item): ?array {
+                $date = $item['date'] ?? null;
+                if (! is_string($date) || $date === '') {
+                    return null;
+                }
 
-        $events = $sourcePayloads
-            ->flatMap(fn (array $source): array => $source['events'])
-            ->sortBy(fn (array $event): int => (int) ($event['sortAt'] ?? 0))
+                $time = is_string($item['time'] ?? null) ? $item['time'] : null;
+                $startAt = $time ? "{$date} {$time}:00" : "{$date} 09:00:00";
+                $endAt = $time ? Carbon::parse($startAt)->addMinutes(30)->toDateTimeString() : Carbon::parse($startAt)->addHour()->toDateTimeString();
+
+                return [
+                    'title' => (string) ($item['title'] ?? 'Task'),
+                    'source' => (string) ($item['source'] ?? 'Mission data'),
+                    'timeRange' => $time ? "{$time} - ".Carbon::parse($endAt)->format('H:i') : 'Planned',
+                    'location' => null,
+                    'date' => $date,
+                    'startAt' => Carbon::parse($startAt)->toIso8601String(),
+                    'endAt' => Carbon::parse($endAt)->toIso8601String(),
+                    'sortAt' => Carbon::parse($startAt)->getTimestamp(),
+                ];
+            })
+            ->filter();
+
+        $datedActionableEvents = $scoredActionable
+            ->filter(fn (array $item): bool => is_string($item['date'] ?? null) && ($item['date'] !== ''))
+            ->map(function (array $item): array {
+                $date = (string) $item['date'];
+
+                return [
+                    'title' => (string) ($item['title'] ?? 'Task'),
+                    'source' => (string) ($item['source'] ?? 'Mission data'),
+                    'timeRange' => 'Task',
+                    'location' => null,
+                    'date' => $date,
+                    'startAt' => Carbon::parse($date.' 13:00:00')->toIso8601String(),
+                    'endAt' => Carbon::parse($date.' 13:30:00')->toIso8601String(),
+                    'sortAt' => Carbon::parse($date.' 13:00:00')->getTimestamp(),
+                ];
+            });
+
+        $events = $timedEvents
+            ->merge($datedActionableEvents)
+            ->filter(function (array $event) use ($weekStart, $weekEnd): bool {
+                try {
+                    $date = Carbon::parse((string) ($event['date'] ?? ''));
+
+                    return $date->betweenIncluded($weekStart, $weekEnd);
+                } catch (Throwable) {
+                    return false;
+                }
+            })
+            ->sortBy('sortAt')
             ->values();
 
         $calendarWeek = collect(range(0, 6))
-            ->map(function (int $offset) use ($windowStart, $events): array {
-                $day = $windowStart->copy()->addDays($offset);
+            ->map(function (int $offset) use ($weekStart, $events): array {
+                $day = $weekStart->copy()->addDays($offset);
                 $dateKey = $day->toDateString();
 
                 $dayEvents = $events
@@ -496,31 +543,50 @@ class MissionDataService
                     }
                 }
 
-                $mappedEvents = $dayEvents
-                    ->map(function (array $event, int $index) use ($conflictIndexes): array {
-                        return [
-                            'title' => (string) ($event['title'] ?? 'Untitled event'),
-                            'source' => (string) ($event['source'] ?? 'Unknown'),
-                            'timeRange' => (string) ($event['timeRange'] ?? 'Unknown time'),
-                            'location' => $event['location'] ?? null,
-                            'isConflict' => isset($conflictIndexes[$index]),
-                        ];
-                    })
-                    ->all();
-
                 return [
                     'date' => $dateKey,
                     'label' => $day->format('l'),
                     'dateLabel' => $day->format('d M'),
-                    'events' => $mappedEvents,
+                    'events' => $dayEvents
+                        ->map(function (array $event, int $index) use ($conflictIndexes): array {
+                            return [
+                                'title' => (string) ($event['title'] ?? 'Untitled task'),
+                                'source' => (string) ($event['source'] ?? 'Mission data'),
+                                'timeRange' => (string) ($event['timeRange'] ?? 'Task'),
+                                'location' => $event['location'] ?? null,
+                                'isConflict' => isset($conflictIndexes[$index]),
+                            ];
+                        })
+                        ->all(),
                     'conflicts' => $conflicts,
                 ];
             })
             ->all();
 
+        $unscheduled = collect(['planned', 'backlog', 'active', 'review'])
+            ->flatMap(function (string $column) use ($columns): Collection {
+                return collect($columns[$column] ?? [])->map(fn (string $title): array => [
+                    'title' => $title,
+                    'type' => $column,
+                    'source' => 'Mission data',
+                ]);
+            })
+            ->unique('title')
+            ->take(20)
+            ->values()
+            ->all();
+
         $totalEvents = collect($calendarWeek)->sum(fn (array $day): int => count($day['events'] ?? []));
         $daysWithEvents = collect($calendarWeek)->filter(fn (array $day): bool => ! empty($day['events']))->count();
         $conflictsCount = collect($calendarWeek)->sum(fn (array $day): int => (int) ($day['conflicts'] ?? 0));
+
+        $diagnostics = [
+            [
+                'name' => 'assistant week schedule',
+                'ok' => true,
+                'message' => 'Built from cron jobs, GitHub items and active mission tasks',
+            ],
+        ];
 
         return [
             'calendarWeek' => $calendarWeek,
@@ -528,23 +594,10 @@ class MissionDataService
                 'totalEvents' => $totalEvents,
                 'daysWithEvents' => $daysWithEvents,
                 'conflictsCount' => $conflictsCount,
-                'diagnostics' => $sourcePayloads
-                    ->map(fn (array $source): array => [
-                        'name' => $source['name'],
-                        'ok' => $source['ok'],
-                        'message' => $source['message'],
-                    ])
-                    ->values()
-                    ->all(),
+                'unscheduled' => $unscheduled,
+                'diagnostics' => $diagnostics,
             ],
-            'sourceDiagnostics' => $sourcePayloads
-                ->map(fn (array $source): array => [
-                    'name' => $source['name'],
-                    'ok' => $source['ok'],
-                    'message' => $source['message'],
-                ])
-                ->values()
-                ->all(),
+            'sourceDiagnostics' => $diagnostics,
         ];
     }
 

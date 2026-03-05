@@ -96,11 +96,11 @@
                 <section class="space-y-3">
                     <div class="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 sm:grid-cols-3">
                         <div class="rounded-md border border-zinc-800/80 bg-zinc-950/80 px-2 py-1.5">
-                            <p class="text-[10px] uppercase tracking-wide text-zinc-500">Totale hendelser</p>
+                            <p class="text-[10px] uppercase tracking-wide text-zinc-500">Totale oppgaver</p>
                             <p class="text-xs font-medium text-zinc-100">{{ $calendarSummary['totalEvents'] ?? 0 }}</p>
                         </div>
                         <div class="rounded-md border border-zinc-800/80 bg-zinc-950/80 px-2 py-1.5">
-                            <p class="text-[10px] uppercase tracking-wide text-zinc-500">Dager med hendelser</p>
+                            <p class="text-[10px] uppercase tracking-wide text-zinc-500">Dager med oppgaver</p>
                             <p class="text-xs font-medium text-zinc-100">{{ $calendarSummary['daysWithEvents'] ?? 0 }}</p>
                         </div>
                         <div class="rounded-md border border-zinc-800/80 bg-zinc-950/80 px-2 py-1.5">
@@ -136,16 +136,16 @@
                                 </div>
 
                                 @if (empty($day['events']))
-                                    <p class="mt-2 rounded border border-dashed border-zinc-700 bg-zinc-950/50 px-2 py-1.5 text-xs text-zinc-500">Ingen hendelser.</p>
+                                    <p class="mt-2 rounded border border-dashed border-zinc-700 bg-zinc-950/50 px-2 py-1.5 text-xs text-zinc-500">Ingen planlagte oppgaver.</p>
                                 @else
                                     <ul class="mt-2 space-y-2">
                                         @foreach ($day['events'] as $event)
                                             <li class="rounded-md border px-2 py-1.5 {{ ($event['isConflict'] ?? false) ? 'border-rose-700/60 bg-rose-950/20' : 'border-zinc-800/80 bg-zinc-950/70' }}">
                                                 <div class="flex items-center justify-between gap-2 text-[11px]">
-                                                    <span class="font-medium {{ ($event['isConflict'] ?? false) ? 'text-rose-200' : 'text-zinc-200' }}">{{ $event['timeRange'] ?? 'Unknown time' }}</span>
-                                                    <span class="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-300">{{ $event['source'] ?? 'Unknown' }}</span>
+                                                    <span class="font-medium {{ ($event['isConflict'] ?? false) ? 'text-rose-200' : 'text-zinc-200' }}">{{ $event['timeRange'] ?? 'Task' }}</span>
+                                                    <span class="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-300">{{ $event['source'] ?? 'Mission data' }}</span>
                                                 </div>
-                                                <p class="mt-1 text-xs text-zinc-200">{{ $event['title'] ?? 'Untitled event' }}</p>
+                                                <p class="mt-1 text-xs text-zinc-200">{{ $event['title'] ?? 'Untitled task' }}</p>
                                                 @if (! empty($event['location']))
                                                     <p class="mt-1 text-[11px] text-zinc-500">{{ $event['location'] }}</p>
                                                 @endif
@@ -156,6 +156,22 @@
                             </article>
                         @endforeach
                     </div>
+
+                    @php
+                        $unscheduled = collect($calendarSummary['unscheduled'] ?? []);
+                    @endphp
+                    @if ($unscheduled->isNotEmpty())
+                        <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+                            <h3 class="text-xs font-medium text-zinc-300">Andre oppgaver denne uka (uten dag)</h3>
+                            <ul class="mt-2 space-y-1.5">
+                                @foreach ($unscheduled->take(12) as $task)
+                                    <li class="rounded border border-zinc-800 bg-zinc-950/70 px-2 py-1.5 text-xs text-zinc-300">
+                                        {{ $task['title'] ?? 'Task' }}
+                                    </li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @endif
                 </section>
             @else
                 <section class="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">

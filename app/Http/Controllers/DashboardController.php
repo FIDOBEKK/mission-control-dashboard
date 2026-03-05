@@ -29,7 +29,7 @@ class DashboardController extends Controller
             $activeModule = 'tasks';
         }
 
-        $mission = $this->missionDataService->getMissionData();
+        $mission = $this->missionDataService->getMissionData(preferCache: false);
 
         return view('dashboard.index', [
             'initialMission' => $mission,
@@ -42,6 +42,6 @@ class DashboardController extends Controller
 
     public function mission(): JsonResponse
     {
-        return response()->json($this->missionDataService->getMissionData());
+        return response()->json($this->missionDataService->getMissionData(preferCache: false));
     }
 }

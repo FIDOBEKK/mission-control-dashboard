@@ -14,8 +14,14 @@ class MissionDataService
     /**
      * @return array<string, mixed>
      */
-    public function getMissionData(): array
+    public function getMissionData(bool $preferCache = true): array
     {
+        if ($preferCache) {
+            $cached = $this->readMissionCache();
+            if ($cached !== null) {
+                return $cached;
+            }
+        }
         $sources = [];
         $columns = [
             'planned' => [],
@@ -85,7 +91,7 @@ class MissionDataService
             'issue',
             'list',
             '--repo',
-            'OnePagerHub/frame-generator',
+            'iglebekk/OnePagerHub',
             '--state',
             'open',
             '--limit',
@@ -139,7 +145,7 @@ class MissionDataService
             'pr',
             'list',
             '--repo',
-            'OnePagerHub/frame-generator',
+            'iglebekk/OnePagerHub',
             '--state',
             'open',
             '--limit',
@@ -212,7 +218,7 @@ class MissionDataService
             ];
         }
 
-        $processData = $this->runCommand(['ps', '-Ao', 'pid,pcpu,pmem,comm,args'], timeout: 4);
+        $processData = $this->runCommand(['ps', '-Ao', 'pid,%cpu,%mem,comm,args'], timeout: 4);
         $sources[] = $this->sourceStatus('ps snapshot', $processData);
 
         if ($processData['ok']) {
@@ -251,7 +257,7 @@ class MissionDataService
 
         $gitRepos = collect([
             base_path(),
-            '/Users/andersiglebekk/Documents/OnePagerHub/frame-generator',
+            '/Users/andersiglebekk/Documents/OnePagerHub',
             '/Users/andersiglebekk/Documents/frame-generator',
         ])->filter(fn (string $path): bool => is_dir($path.'/.git'))->unique()->values();
 
@@ -936,6 +942,43 @@ class MissionDataService
     }
 
     /**
+     * @return array<string, mixed>|null
+     */
+    private function readMissionCache(): ?array
+    {
+        $cachePath = storage_path('app/mission-cache.json');
+        if (! is_file($cachePath)) {
+            return null;
+        }
+
+        try {
+            $raw = file_get_contents($cachePath);
+            if ($raw === false || trim($raw) === '') {
+                return null;
+            }
+
+            $payload = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+            if (! is_array($payload)) {
+                return null;
+            }
+
+            if (! isset($payload['fetchedAt']) || ! is_string($payload['fetchedAt'])) {
+                return null;
+            }
+
+            $ttl = (int) env('MISSION_CACHE_TTL_SECONDS', 180);
+            $ageSeconds = abs(now()->diffInSeconds(Carbon::parse($payload['fetchedAt']), false));
+            if ($ageSeconds > $ttl) {
+                return null;
+            }
+
+            return $payload;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
      * @param  array<string, mixed>  $item
      */
     private function scoreItem(array $item): int
@@ -1007,6 +1050,9 @@ class MissionDataService
         try {
             $process = new Process($command, $cwd);
             $process->setTimeout($timeout);
+            $process->setEnv([
+                'PATH' => '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+            ]);
             $process->run();
 
             $output = trim($process->getOutput());
